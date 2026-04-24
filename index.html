@@ -28,6 +28,7 @@
             box-shadow: 0 8px 25px rgba(0,0,0,0.1);
             overflow: hidden;
             cursor: crosshair;
+            touch-action: none; /* 防止手機上拖曳時觸發網頁捲動 */
         }
 
         canvas {
@@ -56,19 +57,20 @@
         /* Invisible touch areas for finger dragging */
         .finger-handle {
             position: absolute;
-            width: 50px; 
-            height: 50px;
+            width: 60px; /* 稍微放大熱區，方便手機點擊 */
+            height: 60px;
             background: transparent;
-            margin-left: -25px;
-            margin-top: -25px;
+            margin-left: -30px;
+            margin-top: -30px;
             z-index: 20;
             cursor: grab;
             display: none; 
+            touch-action: none;
         }
         .finger-handle:active { cursor: grabbing; }
 
-        .panel-container { display: flex; gap: 20px; margin-top: 20px; width: 800px; }
-        .controls { flex: 1; background: #fff; padding: 15px; border-radius: 8px; border: 1px solid #ddd; }
+        .panel-container { display: flex; gap: 20px; margin-top: 20px; width: 800px; flex-wrap: wrap; }
+        .controls { flex: 1; min-width: 350px; background: #fff; padding: 15px; border-radius: 8px; border: 1px solid #ddd; }
         .controls h3 { margin: 0 0 10px 0; font-size: 16px; border-bottom: 1px solid #eee; padding-bottom: 8px;}
         .control-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         .control-item { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; }
@@ -174,9 +176,6 @@
                 }))
                 .filter(f => f.active);
 
-            // ==========================================
-            // 1. Intersection calculation (Ghost Area)
-            // ==========================================
             if (activeCams.length > 0 && activeFingers.length > 0) {
                 accCtx.globalCompositeOperation = 'source-over';
                 accCtx.fillStyle = 'rgba(150, 150, 150, 0.4)'; 
@@ -204,9 +203,6 @@
                 });
                 ctx.drawImage(accCanvas, 0, 0);
 
-                // ==========================================
-                // 2. Coloring real touch points
-                // ==========================================
                 activeFingers.forEach(f => {
                     colorCtx.clearRect(0, 0, W, H);
                     colorCtx.globalCompositeOperation = 'source-over';
@@ -223,9 +219,6 @@
                     ctx.restore();
                 });
 
-                // ==========================================
-                // 3. Draw ray traces
-                // ==========================================
                 ctx.lineWidth = 1;
                 activeCams.forEach(cam => {
                     ctx.strokeStyle = cam.color;
@@ -245,9 +238,6 @@
                 });
             }
 
-            // ==========================================
-            // 4. Draw fingers (thick grey dashed circle + black number)
-            // ==========================================
             activeFingers.forEach(f => {
                 ctx.save();
                 ctx.beginPath();
@@ -265,9 +255,6 @@
                 ctx.fillText(f.idx + 1, f.x, f.y);
             });
 
-            // ==========================================
-            // 5. Draw camera text labels (Cam 1 ~ Cam 6)
-            // ==========================================
             ctx.font = 'bold 14px Arial';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
@@ -275,47 +262,65 @@
             camerasData.forEach((cam, index) => {
                 const isActive = document.getElementById(cam.id).checked;
                 
-                // Calculate label position to prevent overlapping or out-of-bounds
                 let textY = cam.y === 0 ? 25 : H - 25;
                 let textX = cam.x;
                 if (cam.x < 50) textX += 20; 
                 if (cam.x > W - 50) textX -= 20;
 
-                // White outline to ensure readability against rays
                 ctx.lineWidth = 3;
                 ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
                 ctx.strokeText(`Cam ${index + 1}`, textX, textY);
                 
-                // Fill text (matches ray color if active, otherwise grey)
                 ctx.fillStyle = isActive ? cam.color : '#999';
                 ctx.fillText(`Cam ${index + 1}`, textX, textY);
             });
         }
 
-        // Drag logic
+        // Combined Drag logic for Mouse & Touch
         let activeHandle = null;
         let startX, startY;
 
-        fingersDOM.forEach(handle => {
-            handle.addEventListener('mousedown', e => {
-                activeHandle = handle;
-                startX = e.clientX - parseFloat(handle.style.left);
-                startY = e.clientY - parseFloat(handle.style.top);
-            });
-        });
+        function handleStart(e, handle) {
+            e.preventDefault(); // 防止預設行為
+            activeHandle = handle;
+            const clientX = e.type.includes('touch') ? e.touches[0].clientX : e.clientX;
+            const clientY = e.type.includes('touch') ? e.touches[0].clientY : e.clientY;
+            
+            startX = clientX - parseFloat(handle.style.left);
+            startY = clientY - parseFloat(handle.style.top);
+        }
 
-        window.addEventListener('mousemove', e => {
+        function handleMove(e) {
             if (!activeHandle) return;
-            let nx = e.clientX - startX;
-            let ny = e.clientY - startY;
+            e.preventDefault(); // 防止滾動頁面
+            const clientX = e.type.includes('touch') ? e.touches[0].clientX : e.clientX;
+            const clientY = e.type.includes('touch') ? e.touches[0].clientY : e.clientY;
+
+            let nx = clientX - startX;
+            let ny = clientY - startY;
             nx = Math.max(0, Math.min(W, nx));
             ny = Math.max(0, Math.min(H, ny));
             activeHandle.style.left = nx + 'px';
             activeHandle.style.top = ny + 'px';
             draw();
+        }
+
+        function handleEnd() {
+            activeHandle = null;
+        }
+
+        fingersDOM.forEach(handle => {
+            // 滑鼠事件
+            handle.addEventListener('mousedown', (e) => handleStart(e, handle));
+            // 觸控事件
+            handle.addEventListener('touchstart', (e) => handleStart(e, handle), { passive: false });
         });
 
-        window.addEventListener('mouseup', () => { activeHandle = null; });
+        window.addEventListener('mousemove', handleMove);
+        window.addEventListener('touchmove', handleMove, { passive: false });
+
+        window.addEventListener('mouseup', handleEnd);
+        window.addEventListener('touchend', handleEnd);
 
         draw();
     </script>
