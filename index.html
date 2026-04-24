@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>6-Cam Precise Tangent Ray & Ghost Intersection Simulation</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f0f2f5;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+            user-select: none;
+        }
+        h2 { margin: 10px 0; }
+        .hint { color: #555; font-size: 15px; margin-bottom: 15px; text-align: center; }
+
+        #stage {
+            position: relative;
+            width: 800px;
+            height: 500px;
+            background: #fff;
+            border: 2px solid #ccc;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+            overflow: hidden;
+            cursor: crosshair;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+
+        /* Camera Representation (Top 4, Bottom 2) */
+        .camera {
+            position: absolute;
+            width: 30px;
+            height: 12px;
+            background: #333;
+            border-radius: 2px;
+            z-index: 10;
+        }
+        .cam-1 { top: -6px; left: 15px; }
+        .cam-2 { top: -6px; left: calc(1/3 * 800px - 15px); }
+        .cam-3 { top: -6px; left: calc(2/3 * 800px - 15px); }
+        .cam-4 { top: -6px; right: 15px; }
+        .cam-5 { bottom: -6px; left: 15px; }
+        .cam-6 { bottom: -6px; right: 15px; }
+
+        /* Invisible touch areas for finger dragging */
+        .finger-handle {
+            position: absolute;
+            width: 50px; 
+            height: 50px;
+            background: transparent;
+            margin-left: -25px;
+            margin-top: -25px;
+            z-index: 20;
+            cursor: grab;
+            display: none; 
+        }
+        .finger-handle:active { cursor: grabbing; }
+
+        .panel-container { display: flex; gap: 20px; margin-top: 20px; width: 800px; }
+        .controls { flex: 1; background: #fff; padding: 15px; border-radius: 8px; border: 1px solid #ddd; }
+        .controls h3 { margin: 0 0 10px 0; font-size: 16px; border-bottom: 1px solid #eee; padding-bottom: 8px;}
+        .control-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .control-item { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; }
+        .control-item input { cursor: pointer; width: 16px; height: 16px; }
+    </style>
+</head>
+<body>
+
+    <h2>6-Cam Precise Tangent Ray & Ghost Intersection Simulation</h2>
+    <div class="hint">
+        Fingers are represented by <b>thick dashed grey circles</b>. Rays are precisely tangent to the finger edges.<br>
+        Grey areas represent ghosts, while colored areas represent valid touch polygons inside the fingers. Camera numbers are labeled nearby.
+    </div>
+
+    <div id="stage">
+        <canvas id="polyCanvas" width="800" height="500"></canvas>
+        
+        <div class="camera cam-1"></div>
+        <div class="camera cam-2"></div>
+        <div class="camera cam-3"></div>
+        <div class="camera cam-4"></div>
+        <div class="camera cam-5"></div>
+        <div class="camera cam-6"></div>
+
+        <div class="finger-handle" id="f1" style="left: 200px; top: 150px;"></div>
+        <div class="finger-handle" id="f2" style="left: 400px; top: 200px;"></div>
+        <div class="finger-handle" id="f3" style="left: 600px; top: 150px;"></div>
+        <div class="finger-handle" id="f4" style="left: 300px; top: 350px;"></div>
+        <div class="finger-handle" id="f5" style="left: 500px; top: 350px;"></div>
+    </div>
+
+    <div class="panel-container">
+        <div class="controls">
+            <h3>Camera Toggles (Top 4, Bottom 2)</h3>
+            <div class="control-grid">
+                <label class="control-item"><input type="checkbox" id="c1" checked onchange="draw()"> Cam 1 (Top Left)</label>
+                <label class="control-item"><input type="checkbox" id="c2" checked onchange="draw()"> Cam 2 (Top Mid-Left)</label>
+                <label class="control-item"><input type="checkbox" id="c3" checked onchange="draw()"> Cam 3 (Top Mid-Right)</label>
+                <label class="control-item"><input type="checkbox" id="c4" checked onchange="draw()"> Cam 4 (Top Right)</label>
+                <label class="control-item"><input type="checkbox" id="c5" checked onchange="draw()"> Cam 5 (Bottom Left)</label>
+                <label class="control-item"><input type="checkbox" id="c6" checked onchange="draw()"> Cam 6 (Bottom Right)</label>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <h3>Finger Placement</h3>
+            <div class="control-grid">
+                <label class="control-item"><input type="checkbox" checked onchange="toggleFinger('f1', this.checked)"> Finger 1</label>
+                <label class="control-item"><input type="checkbox" checked onchange="toggleFinger('f2', this.checked)"> Finger 2</label>
+                <label class="control-item"><input type="checkbox" checked onchange="toggleFinger('f3', this.checked)"> Finger 3</label>
+                <label class="control-item"><input type="checkbox" checked onchange="toggleFinger('f4', this.checked)"> Finger 4</label>
+                <label class="control-item"><input type="checkbox" checked onchange="toggleFinger('f5', this.checked)"> Finger 5</label>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const stage = document.getElementById('stage');
+        const canvas = document.getElementById('polyCanvas');
+        const ctx = canvas.getContext('2d');
+        const fingersDOM = document.querySelectorAll('.finger-handle');
+
+        const W = canvas.width = 800;
+        const H = canvas.height = 500;
+        const FINGER_RADIUS = 22;
+
+        const accCanvas = document.createElement('canvas'); accCanvas.width = W; accCanvas.height = H;
+        const accCtx = accCanvas.getContext('2d');
+        const camCanvas = document.createElement('canvas'); camCanvas.width = W; camCanvas.height = H;
+        const camCtx = camCanvas.getContext('2d');
+        const colorCanvas = document.createElement('canvas'); colorCanvas.width = W; colorCanvas.height = H;
+        const colorCtx = colorCanvas.getContext('2d');
+
+        const camerasData = [
+            { id: 'c1', x: 30,  y: 0,   color: '#e91e63' },
+            { id: 'c2', x: 266, y: 0,   color: '#9c27b0' },
+            { id: 'c3', x: 533, y: 0,   color: '#3f51b5' },
+            { id: 'c4', x: 770, y: 0,   color: '#00bcd4' },
+            { id: 'c5', x: 30,  y: 500, color: '#4caf50' },
+            { id: 'c6', x: 770, y: 500, color: '#ff9800' }
+        ];
+
+        const fingerColors = ['rgba(233, 30, 99, 0.6)', 'rgba(255, 152, 0, 0.6)', 'rgba(255, 235, 59, 0.6)', 'rgba(76, 175, 80, 0.6)', 'rgba(33, 150, 243, 0.6)'];
+
+        function toggleFinger(id, isChecked) {
+            document.getElementById(id).style.display = isChecked ? 'block' : 'none';
+            draw();
+        }
+
+        // Initialize display
+        fingersDOM.forEach(f => { f.style.display = 'block'; });
+
+        function draw() {
+            ctx.clearRect(0, 0, W, H);
+
+            const activeCams = camerasData.filter(c => document.getElementById(c.id).checked);
+            const activeFingers = Array.from(fingersDOM)
+                .map((f, idx) => ({
+                    idx: idx,
+                    active: f.style.display === 'block',
+                    x: parseFloat(f.style.left),
+                    y: parseFloat(f.style.top)
+                }))
+                .filter(f => f.active);
+
+            // ==========================================
+            // 1. Intersection calculation (Ghost Area)
+            // ==========================================
+            if (activeCams.length > 0 && activeFingers.length > 0) {
+                accCtx.globalCompositeOperation = 'source-over';
+                accCtx.fillStyle = 'rgba(150, 150, 150, 0.4)'; 
+                accCtx.fillRect(0, 0, W, H);
+
+                activeCams.forEach(cam => {
+                    camCtx.clearRect(0, 0, W, H);
+                    camCtx.fillStyle = '#000';
+                    camCtx.beginPath();
+                    activeFingers.forEach(f => {
+                        const dx = f.x - cam.x; const dy = f.y - cam.y;
+                        const dist = Math.hypot(dx, dy);
+                        if (dist > FINGER_RADIUS) {
+                            const angle = Math.atan2(dy, dx);
+                            const spread = Math.asin(FINGER_RADIUS / dist);
+                            const len = 3000;
+                            camCtx.moveTo(cam.x, cam.y);
+                            camCtx.lineTo(cam.x + Math.cos(angle-spread)*len, cam.y + Math.sin(angle-spread)*len);
+                            camCtx.lineTo(cam.x + Math.cos(angle+spread)*len, cam.y + Math.sin(angle+spread)*len);
+                        }
+                    });
+                    camCtx.fill();
+                    accCtx.globalCompositeOperation = 'destination-in';
+                    accCtx.drawImage(camCanvas, 0, 0);
+                });
+                ctx.drawImage(accCanvas, 0, 0);
+
+                // ==========================================
+                // 2. Coloring real touch points
+                // ==========================================
+                activeFingers.forEach(f => {
+                    colorCtx.clearRect(0, 0, W, H);
+                    colorCtx.globalCompositeOperation = 'source-over';
+                    colorCtx.drawImage(accCanvas, 0, 0);
+                    colorCtx.globalCompositeOperation = 'source-in';
+                    colorCtx.fillStyle = fingerColors[f.idx];
+                    colorCtx.fillRect(0, 0, W, H);
+
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.arc(f.x, f.y, FINGER_RADIUS + 5, 0, Math.PI * 2);
+                    ctx.clip();
+                    ctx.drawImage(colorCanvas, 0, 0);
+                    ctx.restore();
+                });
+
+                // ==========================================
+                // 3. Draw ray traces
+                // ==========================================
+                ctx.lineWidth = 1;
+                activeCams.forEach(cam => {
+                    ctx.strokeStyle = cam.color;
+                    activeFingers.forEach(f => {
+                        const dx = f.x - cam.x; const dy = f.y - cam.y;
+                        const dist = Math.hypot(dx, dy);
+                        if (dist > FINGER_RADIUS) {
+                            const angle = Math.atan2(dy, dx);
+                            const spread = Math.asin(FINGER_RADIUS / dist);
+                            const len = 3000;
+                            ctx.beginPath();
+                            ctx.moveTo(cam.x, cam.y); ctx.lineTo(cam.x + Math.cos(angle-spread)*len, cam.y + Math.sin(angle-spread)*len);
+                            ctx.moveTo(cam.x, cam.y); ctx.lineTo(cam.x + Math.cos(angle+spread)*len, cam.y + Math.sin(angle+spread)*len);
+                            ctx.stroke();
+                        }
+                    });
+                });
+            }
+
+            // ==========================================
+            // 4. Draw fingers (thick grey dashed circle + black number)
+            // ==========================================
+            activeFingers.forEach(f => {
+                ctx.save();
+                ctx.beginPath();
+                ctx.setLineDash([8, 6]); 
+                ctx.lineWidth = 4;        
+                ctx.strokeStyle = '#888'; 
+                ctx.arc(f.x, f.y, FINGER_RADIUS, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.restore();
+
+                ctx.fillStyle = '#000';
+                ctx.font = 'bold 20px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(f.idx + 1, f.x, f.y);
+            });
+
+            // ==========================================
+            // 5. Draw camera text labels (Cam 1 ~ Cam 6)
+            // ==========================================
+            ctx.font = 'bold 14px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            camerasData.forEach((cam, index) => {
+                const isActive = document.getElementById(cam.id).checked;
+                
+                // Calculate label position to prevent overlapping or out-of-bounds
+                let textY = cam.y === 0 ? 25 : H - 25;
+                let textX = cam.x;
+                if (cam.x < 50) textX += 20; 
+                if (cam.x > W - 50) textX -= 20;
+
+                // White outline to ensure readability against rays
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+                ctx.strokeText(`Cam ${index + 1}`, textX, textY);
+                
+                // Fill text (matches ray color if active, otherwise grey)
+                ctx.fillStyle = isActive ? cam.color : '#999';
+                ctx.fillText(`Cam ${index + 1}`, textX, textY);
+            });
+        }
+
+        // Drag logic
+        let activeHandle = null;
+        let startX, startY;
+
+        fingersDOM.forEach(handle => {
+            handle.addEventListener('mousedown', e => {
+                activeHandle = handle;
+                startX = e.clientX - parseFloat(handle.style.left);
+                startY = e.clientY - parseFloat(handle.style.top);
+            });
+        });
+
+        window.addEventListener('mousemove', e => {
+            if (!activeHandle) return;
+            let nx = e.clientX - startX;
+            let ny = e.clientY - startY;
+            nx = Math.max(0, Math.min(W, nx));
+            ny = Math.max(0, Math.min(H, ny));
+            activeHandle.style.left = nx + 'px';
+            activeHandle.style.top = ny + 'px';
+            draw();
+        });
+
+        window.addEventListener('mouseup', () => { activeHandle = null; });
+
+        draw();
+    </script>
+</body>
+</html>
